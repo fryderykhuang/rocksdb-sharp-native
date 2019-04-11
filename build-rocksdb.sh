@@ -29,9 +29,11 @@ ROCKSDBVNUM=`cat rocksdbversion`
 ROCKSDBVERSION=v${ROCKSDBVNUM}
 SNAPPYVERSION=1.1.7
 
-ROCKSDBREMOTE=https://github.com/facebook/rocksdb
+#ROCKSDBREMOTE=https://github.com/facebook/rocksdb
+#SNAPPYREMOTE=https://github.com/google/snappy
+ROCKSDBREMOTE=ssh://dev.flexem.net:9122/tfs/DefaultCollection/FBox/_git/rocksdb
 SNAPPYREMOTE=https://github.com/google/snappy
-
+LZ4REMOTE=https://github.com/lz4/lz4
 CONCURRENCY=8
 
 fail() {
@@ -66,6 +68,12 @@ update_vcxproj(){
 	/bin/find . -type f -name '*.vcxproj' -exec sed -i 's/MultiThreadedDLL/MultiThreaded/g; s/MultiThreadedDebugDLL/MultiThreadedDebug/g' '{}' ';'
 }
 
+update_vcxproj_lz4(){
+	echo "Patching vcxproj for static vc runtime"
+	/bin/find . -type f -name '*.vcxproj' -exec sed -i 's/MultiThreadedDLL/MultiThreaded/g; s/MultiThreadedDebugDLL/MultiThreadedDebug/g' '{}' ';'
+	/bin/find . -type f -name 'lz4_shared.vcxproj' -exec sed -i 's/DynamicLibrary/StaticLibrary/g; s/\.dll/\.lib/g' '{}' ';'
+}
+
 BASEDIR=$(dirname "$0")
 OSINFO=$(uname)
 
@@ -94,6 +102,21 @@ if [[ $OSINFO == *"MSYS"* || $OSINFO == *"MINGW"* ]]; then
 		}
 		cmd //c "msbuild build/snappy.sln /p:Configuration=Release /m:$CONCURRENCY" || fail "Build of snappy failed"
 	}) || fail "Snappy build failed"
+	
+	mkdir -p lz4 || fail "unable to create lz4 directory"
+	(cd lz4 && {
+		checkout "lz4" "$LZ4REMOTE" "$LZ4VERSION" "$LZ4VERSION"
+		mkdir -p build
+		(cd build && {
+			cmake -G "Visual Studio 15 2017 Win64" ../contrib/cmake_unofficial || fail "Running cmake on snappy failed"
+			update_vcxproj_lz4 || warn "unable to patch lz4 for static vc runtime"
+		}) || fail "cmake build generation failed"
+
+		test -z "$RUNTESTS" || {
+			cmd //c "msbuild build/lz4_shared.vcxproj /p:Configuration=Debug /m:$CONCURRENCY" || fail "Build of LZ4 (debug config) failed"
+		}
+		cmd //c "msbuild build/lz4_shared.vcxproj /p:Configuration=Release /m:$CONCURRENCY" || fail "Build of LZ4 failed"
+	}) || fail "LZ4 build failed"
 
 
 	mkdir -p rocksdb || fail "unable to create rocksdb directory"
@@ -106,7 +129,7 @@ if [[ $OSINFO == *"MSYS"* || $OSINFO == *"MINGW"* ]]; then
 
 		mkdir -p build
 		(cd build && {
-			cmake -G "Visual Studio 15 2017 Win64" -WITH_TESTS=OFF -DWITH_MD_LIBRARY=OFF -DOPTDBG=1 -DGFLAGS=0 -DSNAPPY=1 -DPORTABLE=1 -DWITH_TOOLS=0 .. || fail "Running cmake failed"
+			cmake -G "Visual Studio 15 2017 Win64" -WITH_TESTS=OFF -DWITH_MD_LIBRARY=OFF -DOPTDBG=1 -DGFLAGS=0 -DSNAPPY=1 -DLZ4=1 -DPORTABLE=1 -DWITH_TOOLS=0 .. || fail "Running cmake failed"
 			update_vcxproj || warn "failed to patch vcxproj files for static vc runtime"
 		}) || fail "cmake build generation failed"
 
@@ -162,6 +185,7 @@ else
 		export ROCKSDB_DISABLE_GFLAGS=1
 		(. ./build_tools/build_detect_platform detected~; {
 			grep detected~ -e '-DSNAPPY' &> /dev/null || fail "failed to detect snappy, install libsnappy-dev"
+			grep detected~ -e '-DLZ4' &> /dev/null || fail "failed to detect lz4, install liblz4-dev"
 			grep detected~ -e '-DZLIB' &> /dev/null || fail "failed to detect zlib, install libzlib-dev"
 			grep detected~ -e '-DGFLAGS' &> /dev/null && fail "gflags detected, see https://github.com/facebook/rocksdb/issues/2310" || true
 		}) || fail "dependency detection failed"
